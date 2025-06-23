@@ -35,7 +35,7 @@ export function FileUploader({ id, file, setFile, accept }: FileUploaderProps) {
       if (isValidFileType(droppedFile)) {
         setFile(droppedFile)
       } else {
-        alert("Please upload an Excel file (.xlsx or .xls)")
+        alert("Please upload an Excel file (.xlsx, .xls, or .xlsb)")
       }
     }
   }
@@ -46,14 +46,18 @@ export function FileUploader({ id, file, setFile, accept }: FileUploaderProps) {
       if (isValidFileType(selectedFile)) {
         setFile(selectedFile)
       } else {
-        alert("Please upload an Excel file (.xlsx or .xls)")
+        alert("Please upload an Excel file (.xlsx, .xls, or .xlsb)")
       }
     }
   }
 
   const isValidFileType = (file: File) => {
-    const validTypes = ["application/vnd.ms-excel", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"]
-    return validTypes.includes(file.type) || file.name.endsWith(".xlsx") || file.name.endsWith(".xls")
+     const validTypes = [
+      "application/vnd.ms-excel",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "application/vnd.ms-excel.sheet.binary.macroEnabled.12",
+    ]
+    return validTypes.includes(file.type) || file.name.endsWith(".xlsx") || file.name.endsWith(".xls") || file.name.endsWith(".xlsb")
   }
 
   const removeFile = () => {
@@ -78,13 +82,13 @@ export function FileUploader({ id, file, setFile, accept }: FileUploaderProps) {
           <div className="flex flex-col items-center justify-center space-y-2">
             <Upload className="h-8 w-8 text-muted-foreground" />
             <p className="text-sm font-medium">Drag and drop your Excel file here or click to browse</p>
-            <p className="text-xs text-muted-foreground">Supports .xlsx and .xls files</p>
+            <p className="text-xs text-muted-foreground">Supports .xlsx, .xls, and .xlsb files</p>
           </div>
           <input
             id={id}
             ref={fileInputRef}
             type="file"
-            accept={accept}
+            accept={`${accept},application/vnd.ms-excel.sheet.binary.macroEnabled.12,.xlsb`}
             onChange={handleFileChange}
             className="hidden"
           />
