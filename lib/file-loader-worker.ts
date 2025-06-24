@@ -4,7 +4,7 @@ import * as XLSX from "xlsx"
 // Define message types
 type WorkerMessage = {
   type: "loadSheets" | "loadColumns" | "loadData"
-  fileBuffer: ArrayBuffer
+  fileObject: File // Changed from fileBuffer to fileObject
   fileName: string
   sheetName?: string
 }
@@ -44,25 +44,72 @@ type ProgressUpdate = {
   percent: number
 }
 
+// Wrap FileReader in a promise
+function readFileAsArrayBuffer(file: File, onProgress: (percent: number) => void): Promise<ArrayBuffer> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader() // FileReader is available in workers
+    reader.onload = (event) => {
+      resolve(event.target?.result as ArrayBuffer)
+    }
+    reader.onerror = (error) => {
+      reject(error)
+    }
+    reader.onprogress = (event) => {
+      if (event.lengthComputable) {
+        const percentComplete = Math.round((event.loaded / event.total) * 100)
+        onProgress(percentComplete)
+      }
+    }
+    reader.readAsArrayBuffer(file)
+  })
+}
+
 self.onmessage = async (e: MessageEvent<WorkerMessage>) => {
   try {
-    const { type, fileBuffer, fileName, sheetName } = e.data
+    const { type, fileObject, fileName, sheetName } = e.data // Use fileObject
 
-    // Send initial progress update
-    sendProgress("Reading file...", 10)
+    sendProgress("Preparing file...", 5) // Initial stage
+
+    let fileBuffer: ArrayBuffer
+    try {
+      // Read the File into an ArrayBuffer within the worker
+      // Update progress specifically for file reading phase (e.g. 5% to 15% of overall)
+      fileBuffer = await readFileAsArrayBuffer(fileObject, (percent) => {
+         sendProgress(`Reading file content... ${percent}%`, 5 + Math.round(percent * 0.1)) // Scale to 5-15% range
+      })
+      sendProgress("File content loaded, parsing workbook...", 15)
+    } catch (readError) {
+      throw new Error(`Failed to read file into ArrayBuffer: ${readError instanceof Error ? readError.message : String(readError)}`)
+    }
 
     // Read the workbook from the ArrayBuffer
-    const workbook = XLSX.read(new Uint8Array(fileBuffer), { type: "array" })
+    // Optimize XLSX.read based on the operation type
+    let workbook: XLSX.WorkBook;
+    const readOpts: XLSX.ParsingOptions = { type: "array", cellStyles: false };
+
+    if (type === "loadSheets") {
+      readOpts.bookSheets = true; // Only parse sheet names and basic structures
+      readOpts.sheetStubs = true; // Create stubs, don't parse cell data for sheets listing
+    } else if (sheetName) {
+      // For loadColumns and loadData, if a sheetName is provided, try to parse only that sheet.
+      // Note: The 'sheets' option in XLSX.read might still parse shared structures
+      // but can be more efficient for targeted sheet operations.
+      readOpts.sheets = sheetName;
+    }
+
+    workbook = XLSX.read(new Uint8Array(fileBuffer), readOpts);
+    sendProgress("Workbook parsed.", 20); // Update progress after workbook parsing. Base for next steps.
 
     switch (type) {
       case "loadSheets":
-        sendProgress("Extracting sheets...", 50)
+        // This task now happens after initial 20% (file read + workbook parse)
+        sendProgress("Extracting sheets...", 20 + 30); // Stage progress: 20% base + 30% for this = 50%
 
         if (!workbook || !workbook.SheetNames || workbook.SheetNames.length === 0) {
-          throw new Error("No sheets found in the workbook")
+          throw new Error("No sheets found in the workbook");
         }
 
-        sendProgress("Processing complete", 100)
+        sendProgress("Processing complete", 100); // Overall 100%
         self.postMessage({
           type: "sheets",
           sheets: workbook.SheetNames,
@@ -74,8 +121,8 @@ self.onmessage = async (e: MessageEvent<WorkerMessage>) => {
         if (!sheetName) {
           throw new Error("Sheet name not provided")
         }
-
-        sendProgress("Reading sheet structure...", 30)
+        // Progress: 20% base. This operation takes ~40% (20-60) for structure, then ~30% (60-90) for extraction.
+        sendProgress("Reading sheet structure...", 20 + 10) // 30%
 
         if (!workbook.SheetNames.includes(sheetName)) {
           throw new Error(`Sheet "${sheetName}" not found in workbook`)
@@ -86,7 +133,7 @@ self.onmessage = async (e: MessageEvent<WorkerMessage>) => {
           throw new Error(`Sheet "${sheetName}" is empty or invalid`)
         }
 
-        sendProgress("Extracting column headers...", 60)
+        sendProgress("Extracting column headers...", 20 + 40) // 60%
 
         // Get the range of the sheet
         const range = XLSX.utils.decode_range(worksheet["!ref"] || "A1")
@@ -104,8 +151,6 @@ self.onmessage = async (e: MessageEvent<WorkerMessage>) => {
           const cell = worksheet[XLSX.utils.encode_cell({ r: range.s.r, c: C })]
           headers.push(cell ? String(cell.v) : `Column_${C + 1}`)
         }
-
-        sendProgress("Processing complete", 100)
 
         // Create default headers if none found
         if (headers.length === 0) {
@@ -129,7 +174,7 @@ self.onmessage = async (e: MessageEvent<WorkerMessage>) => {
             throw new Error(`No data found in sheet "${sheetName}"`)
           }
         }
-
+        sendProgress("Column processing complete.", 100) // Overall 100% for this task
         self.postMessage({
           type: "columns",
           columns: headers,
@@ -138,11 +183,12 @@ self.onmessage = async (e: MessageEvent<WorkerMessage>) => {
         break
 
       case "loadData":
+        // This task now happens after initial 20% (file read + workbook parse)
         if (!sheetName) {
           throw new Error("Sheet name not provided")
         }
 
-        sendProgress("Reading sheet data...", 30)
+        sendProgress("Reading sheet data...", 20 + 5) // 25%
 
         if (!workbook.SheetNames.includes(sheetName)) {
           throw new Error(`Sheet "${sheetName}" not found in workbook`)
@@ -153,7 +199,7 @@ self.onmessage = async (e: MessageEvent<WorkerMessage>) => {
           throw new Error(`Sheet "${sheetName}" is empty or invalid`)
         }
 
-        sendProgress("Converting sheet to array of arrays...", 50)
+        sendProgress("Converting sheet to array of arrays...", 20 + 15) // 35%
 
         // Convert to array of arrays (rows)
         const rowsAsArrays: any[][] = XLSX.utils.sheet_to_json(ws, {
@@ -177,7 +223,8 @@ self.onmessage = async (e: MessageEvent<WorkerMessage>) => {
           throw new Error(`No data rows found in sheet "${sheetName}" (only headers?)`)
         }
 
-        sendProgress(`Processing ${totalRows} rows...`, 60)
+        // Base progress is 35%. Row processing will take up to 95%. So 60% of the total progress is for this loop.
+        sendProgress(`Processing ${totalRows} rows...`, 35)
 
         const chunkSize = 500 // Configurable chunk size for sending data
         let processedRows = 0
@@ -203,18 +250,20 @@ self.onmessage = async (e: MessageEvent<WorkerMessage>) => {
             data: chunkObjects,
           } as DataChunkResponse)
 
-          const percentComplete = Math.min(60 + (processedRows / totalRows) * 35, 95) // 60% to 95% for this part
+          // Calculate percent complete for this stage (max 60% of total progress for this loop)
+          // Current progress = base (35%) + portion of this stage's allocated 60%
+          const stagePercent = totalRows > 0 ? (processedRows / totalRows) : 1;
+          const overallPercentComplete = Math.min(35 + Math.round(stagePercent * 60), 95);
           sendProgress(
             `Processed ${processedRows} of ${totalRows} rows...`,
-            percentComplete,
+            overallPercentComplete,
           )
 
-          // Allow event loop to process other messages if needed, especially for very large chunks
-          // Though for 500 rows, this might be optional.
+          // Allow event loop to process other messages
           await new Promise((resolve) => setTimeout(resolve, 0))
         }
 
-        sendProgress("All data processed and sent", 100)
+        sendProgress("All data processed and sent", 100) // Overall 100%
         self.postMessage({ type: "dataEnd" } as DataEndResponse)
         break
     }

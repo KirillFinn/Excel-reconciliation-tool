@@ -1,6 +1,6 @@
 import type { ColumnMapping } from "@/components/column-mapper"
-// Import the new streaming function and the old one for column validation for now
-import { getSheetDataStreamed, getSheetColumns, getSheetData } from "@/lib/file-service" // Added getSheetData back for a moment
+// Import the new streaming function and the new worker-based getSheetColumns
+import { getSheetDataStreamed, getSheetColumnsWithWorker } from "@/lib/file-service"
 
 interface Transaction {
   [key: string]: any
@@ -45,19 +45,25 @@ export async function processFiles(
   try {
     onProgress?.("Initializing...", 0)
 
-    // Step 0: Validate column mappings by fetching headers
-    onProgress?.("Validating column mappings...", 2)
-    const file1Headers = await getSheetColumns(file1, sheet1)
-    const file2Headers = await getSheetColumns(file2, sheet2)
-    validateColumnMappingsAgainstHeaders(file1Headers, file2Headers, columnMappings)
-    onProgress?.("Column mappings validated.", 5)
+    // Step 0: Validate column mappings by fetching headers using the worker
+    onProgress?.("Fetching headers for File 1...", 1)
+    const file1Headers = await getSheetColumnsWithWorker(file1, sheet1, (stage, percent) => {
+      onProgress?.(`File 1 Headers: ${stage}`, 1 + percent * 0.02) // Allocate 2% for this (1-3%)
+    })
+    onProgress?.("Fetching headers for File 2...", 3)
+    const file2Headers = await getSheetColumnsWithWorker(file2, sheet2, (stage, percent) => {
+      onProgress?.(`File 2 Headers: ${stage}`, 3 + percent * 0.02) // Allocate 2% for this (3-5%)
+    })
 
-    // Create async iterators for streaming data
+    validateColumnMappingsAgainstHeaders(file1Headers, file2Headers, columnMappings)
+    onProgress?.("Column mappings validated.", 5) // Validation itself is quick
+
+    // Create async iterators for streaming data, progress now starts after header loading
     const file1DataStream = getSheetDataStreamed(file1, sheet1, (stage, percent) => {
-      onProgress?.(`File 1: ${stage}`, 5 + percent * 0.20) // 5% to 25%
+      onProgress?.(`File 1 Data: ${stage}`, 5 + percent * 0.20) // 5% to 25% (same allocation for data streaming part)
     })
     const file2DataStream = getSheetDataStreamed(file2, sheet2, (stage, percent) => {
-      onProgress?.(`File 2: ${stage}`, 25 + percent * 0.20) // 25% to 45%
+      onProgress?.(`File 2 Data: ${stage}`, 25 + percent * 0.20) // 25% to 45% (same allocation for data streaming part)
     })
 
     // Step 1: Find duplicates within each file first

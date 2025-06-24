@@ -211,24 +211,16 @@ function getWorker(): Worker {
 }
 
 export async function* getSheetDataStreamed(
-  file: File,
+  file: File, // Pass the File object directly
   sheetName: string,
   onProgress?: ProgressCallback,
 ): AsyncGenerator<any[], void, void> {
   const worker = getWorker()
-  let fileBuffer: ArrayBuffer
 
-  try {
-    fileBuffer = await file.arrayBuffer()
-  } catch (error) {
-    console.error("Error reading file into ArrayBuffer:", error)
-    throw new Error(`Failed to read file: ${error instanceof Error ? error.message : String(error)}`)
-  }
-
-  // Send message to worker to start loading data
+  // Send message to worker to start loading data, passing the File object
   worker.postMessage({
     type: "loadData",
-    fileBuffer,
+    fileObject: file, // Changed from fileBuffer to fileObject
     fileName: file.name,
     sheetName,
   })
@@ -329,29 +321,62 @@ export function terminateFileWorker() {
 export async function getWorkbookSheetsWithWorker(file: File, onProgress?: ProgressCallback): Promise<string[]> {
   return new Promise(async (resolve, reject) => {
     const worker = getWorker()
-    let fileBuffer: ArrayBuffer
-    try {
-      fileBuffer = await file.arrayBuffer()
-    } catch (error) {
-      return reject(new Error(`Failed to read file: ${error instanceof Error ? error.message : String(error)}`))
-    }
+    // No ArrayBuffer conversion here, pass File object directly as per Step 1 changes
+    // const fileBuffer = await file.arrayBuffer(); // This line would be removed or worker handles it
 
     const messageListener = (event: MessageEvent) => {
-      const { type, sheets, status, error, stage, percent, originalType } = event.data
+      const { type, sheets, status, error, stage, percent, originalType } = event.data;
+      if (originalType !== "loadSheets" && type !== "progress" && type !== "error") return; // Filter messages for this call
+
       if (type === "sheets" && status === "success") {
-        worker.removeEventListener("message", messageListener)
-        resolve(sheets)
+        worker.removeEventListener("message", messageListener);
+        resolve(sheets);
       } else if (type === "sheets" && status === "error") {
-        worker.removeEventListener("message", messageListener)
-        reject(new Error(error || "Failed to load sheets from worker"))
+        worker.removeEventListener("message", messageListener);
+        reject(new Error(error || "Failed to load sheets from worker"));
       } else if (type === "progress" && originalType === "loadSheets") {
-        onProgress?.(stage, percent)
+        onProgress?.(stage, percent);
       } else if (type === "error" && originalType === "loadSheets") {
-        worker.removeEventListener("message", messageListener)
-        reject(new Error(error || "Generic error from worker while loading sheets"))
+         worker.removeEventListener("message", messageListener);
+        reject(new Error(error || "Generic error from worker while loading sheets"));
       }
-    }
-    worker.addEventListener("message", messageListener)
-    worker.postMessage({ type: "loadSheets", fileBuffer, fileName: file.name })
-  })
+    };
+    worker.addEventListener("message", messageListener);
+    // Pass File object directly
+    worker.postMessage({ type: "loadSheets", fileObject: file, fileName: file.name });
+  });
+}
+
+export async function getSheetColumnsWithWorker(
+  file: File,
+  sheetName: string,
+  onProgress?: ProgressCallback,
+): Promise<string[]> {
+  return new Promise(async (resolve, reject) => {
+    const worker = getWorker();
+
+    const messageListener = (event: MessageEvent) => {
+      const { type, columns, status, error, stage, percent, originalType } = event.data;
+      // Filter messages specifically for this 'loadColumns' operation
+      if (originalType !== "loadColumns" && type !== "progress" && type !== "error") return;
+
+
+      if (type === "columns" && status === "success") {
+        worker.removeEventListener("message", messageListener);
+        resolve(columns);
+      } else if (type === "columns" && status === "error") {
+        worker.removeEventListener("message", messageListener);
+        reject(new Error(error || "Failed to load columns from worker"));
+      } else if (type === "progress" && originalType === "loadColumns") {
+        onProgress?.(stage, percent);
+      } else if (type === "error" && originalType === "loadColumns") {
+         worker.removeEventListener("message", messageListener);
+        reject(new Error(error || "Generic error from worker while loading columns"));
+      }
+    };
+
+    worker.addEventListener("message", messageListener);
+    // Pass File object and sheetName
+    worker.postMessage({ type: "loadColumns", fileObject: file, sheetName, fileName: file.name });
+  });
 }
