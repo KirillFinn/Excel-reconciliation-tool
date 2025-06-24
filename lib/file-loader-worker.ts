@@ -23,11 +23,19 @@ type ColumnResponse = {
   error?: string
 }
 
-type DataResponse = {
-  type: "data"
+type DataChunkResponse = {
+  type: "dataChunk"
   data: any[]
-  status: "success" | "error"
-  error?: string
+}
+
+type DataEndResponse = {
+  type: "dataEnd"
+}
+
+type ErrorResponse = {
+  type: "error"
+  error: string
+  originalType?: "loadSheets" | "loadColumns" | "loadData"
 }
 
 type ProgressUpdate = {
@@ -145,57 +153,79 @@ self.onmessage = async (e: MessageEvent<WorkerMessage>) => {
           throw new Error(`Sheet "${sheetName}" is empty or invalid`)
         }
 
-        sendProgress("Converting data...", 50)
+        sendProgress("Converting sheet to array of arrays...", 50)
 
-        // Convert to JSON with headers
-        const jsonData = XLSX.utils.sheet_to_json(ws, {
+        // Convert to array of arrays (rows)
+        const rowsAsArrays: any[][] = XLSX.utils.sheet_to_json(ws, {
+          header: 1, // Important: creates array of arrays
           raw: false, // Convert all data types
-          dateNF: "yyyy-mm-dd", // Date format
+          dateNF: "yyyy-mm-dd", // Date format for dates
+          defval: null, // Default value for blank cells
+          blankrows: false, // Skip blank rows
         })
 
-        sendProgress("Processing data...", 75)
-
-        if (!jsonData || jsonData.length === 0) {
+        if (!rowsAsArrays || rowsAsArrays.length === 0) {
           throw new Error(`No data found in sheet "${sheetName}"`)
         }
 
-        // Process data in chunks to avoid memory issues
-        const chunkSize = 1000
-        const totalRows = jsonData.length
+        // Extract headers (first row)
+        const headers = rowsAsArrays[0]
+        const dataRows = rowsAsArrays.slice(1)
+        const totalRows = dataRows.length
+
+        if (totalRows === 0) {
+          throw new Error(`No data rows found in sheet "${sheetName}" (only headers?)`)
+        }
+
+        sendProgress(`Processing ${totalRows} rows...`, 60)
+
+        const chunkSize = 500 // Configurable chunk size for sending data
+        let processedRows = 0
 
         for (let i = 0; i < totalRows; i += chunkSize) {
-          const chunk = jsonData.slice(i, i + chunkSize)
-          const percentComplete = Math.min(75 + (i / totalRows) * 20, 95)
+          const chunkEnd = Math.min(i + chunkSize, totalRows)
+          const chunkRawRows = dataRows.slice(i, chunkEnd)
+          const chunkObjects = chunkRawRows.map((rowArray) => {
+            const rowObject: { [key: string]: any } = {}
+            headers.forEach((header, index) => {
+              if (header !== null && header !== undefined) { // Ensure header is valid
+                rowObject[String(header)] = rowArray[index]
+              }
+            })
+            return rowObject
+          })
 
+          processedRows += chunkObjects.length
+
+          // Send data chunk
+          self.postMessage({
+            type: "dataChunk",
+            data: chunkObjects,
+          } as DataChunkResponse)
+
+          const percentComplete = Math.min(60 + (processedRows / totalRows) * 35, 95) // 60% to 95% for this part
           sendProgress(
-            `Processing row ${i + 1} to ${Math.min(i + chunkSize, totalRows)} of ${totalRows}...`,
+            `Processed ${processedRows} of ${totalRows} rows...`,
             percentComplete,
           )
 
-          // Allow UI to update between chunks
+          // Allow event loop to process other messages if needed, especially for very large chunks
+          // Though for 500 rows, this might be optional.
           await new Promise((resolve) => setTimeout(resolve, 0))
         }
 
-        sendProgress("Processing complete", 100)
-
-        self.postMessage({
-          type: "data",
-          data: jsonData,
-          status: "success",
-        } as DataResponse)
+        sendProgress("All data processed and sent", 100)
+        self.postMessage({ type: "dataEnd" } as DataEndResponse)
         break
     }
   } catch (error) {
-    // Handle errors
     console.error("Worker error:", error)
     const errorMessage = error instanceof Error ? error.message : "Unknown error processing file"
-
-    // Send error back to main thread
     self.postMessage({
-      type: e.data.type === "loadSheets" ? "sheets" : e.data.type === "loadColumns" ? "columns" : "data",
-      status: "error",
+      type: "error",
       error: errorMessage,
-    })
+      originalType: e.data.type, // Pass the original type to help context on main thread
+    } as ErrorResponse)
   }
 }
 

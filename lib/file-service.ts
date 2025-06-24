@@ -196,8 +196,160 @@ export async function getSheetData(file: File, sheetName: string, onProgress?: P
   })
 }
 
+// Store worker instance globally within the module to reuse
+let fileWorker: Worker | null = null
+
+function getWorker(): Worker {
+  if (!fileWorker) {
+    fileWorker = new Worker(new URL("./file-loader-worker.ts", import.meta.url), {
+      type: "module",
+    })
+  }
+  return fileWorker
+}
+
+export async function* getSheetDataStreamed(
+  file: File,
+  sheetName: string,
+  onProgress?: ProgressCallback,
+): AsyncGenerator<any[], void, void> {
+  const worker = getWorker()
+  let fileBuffer: ArrayBuffer
+
+  try {
+    fileBuffer = await file.arrayBuffer()
+  } catch (error) {
+    console.error("Error reading file into ArrayBuffer:", error)
+    throw new Error(`Failed to read file: ${error instanceof Error ? error.message : String(error)}`)
+  }
+
+  // Send message to worker to start loading data
+  worker.postMessage({
+    type: "loadData",
+    fileBuffer,
+    fileName: file.name,
+    sheetName,
+  })
+
+  // Return an async generator
+  try {
+    for await (const event of messageChannel(worker)) {
+      const message = event.data
+      switch (message.type) {
+        case "dataChunk":
+          yield message.data // Yield the chunk of row objects
+          break
+        case "progress":
+          onProgress?.(message.stage, message.percent)
+          break
+        case "dataEnd":
+          return // Signal end of stream
+        case "error":
+          if (message.originalType === "loadData" || !message.originalType) {
+            console.error("Error from file-loader-worker (loadData):", message.error)
+            throw new Error(`Worker error processing sheet data: ${message.error}`)
+          }
+          // For errors from other types (loadSheets, loadColumns), they might be handled by other listeners.
+          // Or we might want to reject here too if the current operation is implicitly tied.
+          // For now, only fail hard on loadData errors in this specific generator.
+          break
+        default:
+          // Ignore other message types not relevant to this stream (e.g., sheets, columns responses for other calls)
+          break
+      }
+    }
+  } finally {
+    // Optional: Decide on worker termination strategy.
+    // If the worker is frequently reused, don't terminate it here.
+    // If it's per-operation, then terminate.
+    // For now, assuming it's reused, so no termination here.
+    // terminateFileWorker(); // if we want to terminate after each stream.
+  }
+}
+
+// Helper to convert worker messages to an async iterable
+async function* messageChannel(worker: Worker) {
+  const messageQueue: MessageEvent[] = []
+  let resolveNextMessage: ((value: MessageEvent) => void) | null = null
+
+  const messageHandler = (event: MessageEvent) => {
+    if (resolveNextMessage) {
+      resolveNextMessage(event)
+      resolveNextMessage = null
+    } else {
+      messageQueue.push(event)
+    }
+  }
+
+  const errorHandler = (event: ErrorEvent) => {
+    // This will cause the awaiting promise in the loop to reject
+    if (resolveNextMessage) {
+      resolveNextMessage(new MessageEvent("error", { data: { type: "error", error: event.message } }) as any)
+      resolveNextMessage = null
+    } else {
+      messageQueue.push(new MessageEvent("error", { data: { type: "error", error: event.message } }) as any)
+    }
+    console.error("Worker error event:", event)
+  }
+
+  worker.addEventListener("message", messageHandler)
+  worker.addEventListener("error", errorHandler)
+
+  try {
+    while (true) {
+      if (messageQueue.length > 0) {
+        yield messageQueue.shift()!
+      } else {
+        yield await new Promise<MessageEvent>((resolve) => {
+          resolveNextMessage = resolve
+        })
+      }
+    }
+  } finally {
+    worker.removeEventListener("message", messageHandler)
+    worker.removeEventListener("error", errorHandler)
+  }
+}
+
 // Clean up resources when done
 export function terminateFileWorker() {
-  // No worker to terminate in this implementation
-  // This is just a placeholder to maintain API compatibility
+  if (fileWorker) {
+    fileWorker.terminate()
+    fileWorker = null
+    console.log("File worker terminated.")
+  }
+}
+
+// Functions to get sheets and columns can also be refactored to use the worker
+// For now, they remain as they are, but show a pattern if we want to change them.
+
+// Example: Refactored getWorkbookSheets using the worker (Optional Enhancement)
+export async function getWorkbookSheetsWithWorker(file: File, onProgress?: ProgressCallback): Promise<string[]> {
+  return new Promise(async (resolve, reject) => {
+    const worker = getWorker()
+    let fileBuffer: ArrayBuffer
+    try {
+      fileBuffer = await file.arrayBuffer()
+    } catch (error) {
+      return reject(new Error(`Failed to read file: ${error instanceof Error ? error.message : String(error)}`))
+    }
+
+    const messageListener = (event: MessageEvent) => {
+      const { type, sheets, status, error, stage, percent, originalType } = event.data
+      if (type === "sheets" && status === "success") {
+        worker.removeEventListener("message", messageListener)
+        resolve(sheets)
+      } else if (type === "sheets" && status === "error") {
+        worker.removeEventListener("message", messageListener)
+        reject(new Error(error || "Failed to load sheets from worker"))
+      } else if (type === "progress" && originalType === "loadSheets") {
+        onProgress?.(stage, percent)
+      } else if (type === "error" && originalType === "loadSheets") {
+        worker.removeEventListener("message", messageListener)
+        reject(new Error(error || "Generic error from worker while loading sheets"))
+      }
+    }
+    worker.addEventListener("message", messageListener)
+    worker.postMessage({ type: "loadSheets", fileBuffer, fileName: file.name })
+  })
 }

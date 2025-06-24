@@ -174,6 +174,7 @@ export function FileUploadForm() {
 
   const handleCompare = async () => {
     setError(null)
+    terminateFileWorker() // Ensure any previous worker is stopped before starting a new process
 
     if (!file1 || !file2 || !selectedSheet1 || !selectedSheet2 || columnMappings.length === 0) return
 
@@ -220,6 +221,7 @@ export function FileUploadForm() {
     setCurrentStep(1)
     setError(null)
     setShowProgress(false)
+    terminateFileWorker() // Terminate worker on full form reset
   }
 
   const canProceedToColumnMapping =
