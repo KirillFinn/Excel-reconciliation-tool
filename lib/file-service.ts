@@ -198,11 +198,13 @@ export async function getSheetData(file: File, sheetName: string, onProgress?: P
 
 // Store worker instance globally within the module to reuse
 let fileWorker: Worker | null = null
+import workerUrl from "./file-loader-worker.ts?url" // Import the worker URL
 
 function getWorker(): Worker {
   if (!fileWorker) {
-    fileWorker = new Worker(new URL("./file-loader-worker.ts", import.meta.url), {
-      type: "module",
+    // Use the imported URL to instantiate the worker
+    fileWorker = new Worker(workerUrl, {
+      type: "module", // ESM worker
     })
   }
   return fileWorker
