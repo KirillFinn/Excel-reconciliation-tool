@@ -97,8 +97,24 @@ self.onmessage = async (e: MessageEvent<WorkerMessage>) => {
       readOpts.sheets = sheetName;
     }
 
+    // Add progress messages before and during XLSX.read
+    sendProgress("Parsing workbook (may take a while for large files)...", 15);
+
+    let parsingTimeout = setTimeout(() => {
+    sendProgress("Still parsing workbook, please wait...", 18);
+    }, 2000);
+
+    let parsingTimeout2 = setTimeout(() => {
+    sendProgress("Parsing is taking longer than expected...", 19);
+    }, 5000);
+
+    // Perform the (blocking) parse
     workbook = XLSX.read(new Uint8Array(fileBuffer), readOpts);
-    sendProgress("Workbook parsed.", 20); // Update progress after workbook parsing. Base for next steps.
+
+    clearTimeout(parsingTimeout);
+    clearTimeout(parsingTimeout2);
+
+    sendProgress("Workbook parsed.", 20);
 
     switch (type) {
       case "loadSheets":
