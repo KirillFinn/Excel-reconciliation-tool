@@ -109,11 +109,18 @@ self.onmessage = async (e: MessageEvent<WorkerMessage>) => {
     }, 5000);
 
     // Perform the (blocking) parse
-    workbook = XLSX.read(new Uint8Array(fileBuffer), readOpts);
-
-    clearTimeout(parsingTimeout);
-    clearTimeout(parsingTimeout2);
-
+    let workbook: XLSX.WorkBook;
+    try {
+      workbook = XLSX.read(new Uint8Array(fileBuffer), readOpts);
+    } catch (parseErr) {
+    sendProgress("Excel parsing failed", 100);
+    self.postMessage({
+      type: "error",
+      error: `Workbook parse error: ${parseErr instanceof Error ? parseErr.message : String(parseErr)}`,
+      originalType: type,
+      } as ErrorResponse);
+    return; // Stop further processing
+    }
     sendProgress("Workbook parsed.", 20);
 
     switch (type) {
