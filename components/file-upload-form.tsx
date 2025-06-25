@@ -11,12 +11,7 @@ import { ReconciliationResults } from "./reconciliation-results"
 import { SheetSelector } from "./sheet-selector"
 import { ColumnMapper, type ColumnMapping } from "./column-mapper"
 import { processFiles } from "@/lib/reconciliation"
-// Use worker-based functions for sheets and columns
-import {
-  getWorkbookSheetsWithWorker,
-  getSheetColumnsWithWorker,
-  terminateFileWorker,
-} from "@/lib/file-service"
+import { getWorkbookSheets, getSheetColumns, terminateFileWorker } from "@/lib/file-service"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Loader2 } from "lucide-react"
 import { Steps } from "./steps"
@@ -82,9 +77,8 @@ export function FileUploadForm() {
       setProgress({ stage: `Loading sheets from ${fileNum === 1 ? "File 1" : "File 2"}...`, percent: 0 })
 
       try {
-        // Use getWorkbookSheetsWithWorker
-        const sheetNames = await getWorkbookSheetsWithWorker(file, (stage, percent) => {
-          setProgress({ stage: `File ${fileNum}: ${stage}`, percent })
+        const sheetNames = await getWorkbookSheets(file, (stage, percent) => {
+          setProgress({ stage, percent })
         })
 
         if (fileNum === 1) {
@@ -139,8 +133,7 @@ export function FileUploadForm() {
 
         try {
           setProgress({ stage: "Loading columns from File 1...", percent: 0 })
-          // Use getSheetColumnsWithWorker
-          columns1 = await getSheetColumnsWithWorker(file1, selectedSheet1, (stage, percent) => {
+          columns1 = await getSheetColumns(file1, selectedSheet1, (stage, percent) => {
             setProgress({ stage: `File 1: ${stage}`, percent })
           })
         } catch (error: any) {
@@ -149,8 +142,7 @@ export function FileUploadForm() {
 
         try {
           setProgress({ stage: "Loading columns from File 2...", percent: 0 })
-          // Use getSheetColumnsWithWorker
-          columns2 = await getSheetColumnsWithWorker(file2, selectedSheet2, (stage, percent) => {
+          columns2 = await getSheetColumns(file2, selectedSheet2, (stage, percent) => {
             setProgress({ stage: `File 2: ${stage}`, percent })
           })
         } catch (error: any) {
