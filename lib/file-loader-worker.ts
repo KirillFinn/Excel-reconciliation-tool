@@ -89,7 +89,7 @@ self.onmessage = async (e: MessageEvent<WorkerMessage>) => {
 
     if (type === "loadSheets") {
       readOpts.bookSheets = true; // Only parse sheet names and basic structures
-      readOpts.sheetStubs = true; // Create stubs, don't parse cell data for sheets listing
+      readOpts.sheetStubs = false; // Create stubs, don't parse cell data for sheets listing
     } else if (sheetName) {
       // For loadColumns and loadData, if a sheetName is provided, try to parse only that sheet.
       // Note: The 'sheets' option in XLSX.read might still parse shared structures
